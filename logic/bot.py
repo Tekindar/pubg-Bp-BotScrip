@@ -781,14 +781,30 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
                                 int(round(sx)), int(round(sy)), 0, 0)
             time.sleep(interval*random.randint(3,9))
 
+    # 🌟 F 交互提示判定词表（按需自己增删）
+    # 载具词：命中即视为"上车"提示，一律不按 F（防止误入载具）
+    VEHICLE_KEYWORDS = ['上车', '下车', '驾驶', '乘坐', '载具']
+    # 明确交互词：命中即为 F 提示
+    INTERACT_KEYWORDS = ['推门', '开门', '关门', '拾取', '救援', '搀扶', '扛起', '背负']
+    # 游戏公告词：安全区倒计时之类的屏幕中央通知，不是交互提示，过滤掉防误触
+    NOTICE_KEYWORDS = ['安全区', '阶段', '距离', '比赛', '存活', '剩余', '分钟', '秒', '分']
+
     def check_f_prompt(self, game_img):
-        """OCR 检测屏幕中心偏右下区域是否出现 F 交互提示"""
+        """OCR 检测屏幕中心偏右下区域是否出现 F 交互提示。
+        判定优先级：
+          1. 含载具词（上车/驾驶…）      -> False（绝不按 F）
+          2. 含明确交互词（推门/拾取…）  -> True
+          3. 含字母 F（键帽被识别出来时）-> True
+          4. 其余含中文的文字（物品名每次不同，靠这条兜底），
+             且不属于游戏公告            -> True
+          5. 无文字                     -> False
+        """
         if game_img is None:
-            print(13213123123123)
             return False
-        
+
         h, w = game_img.shape[:2]
-        roi = game_img[h // 2 - int(h * 0.2): h // 2 + int(h * 0.3), w // 2 - int(h * 0.2): w // 2 + int(h * 0.3)]
+        # 有效区域：x 0.39~0.67w, y 0.30~0.80h（"F 推门"实测落点；顺带修正了旧代码 x 方向误用 h 计算的问题）
+        roi = game_img[int(h * 0.30):int(h * 0.80), int(w * 0.39):int(w * 0.67)]
         if roi.size == 0:
             return False
         roi = cv2.resize(roi, None, fx=2, fy=2)
@@ -799,7 +815,24 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
 
         if not result:
             return False
-        return any('F' in str(item[1]).upper() for item in result) or any('推门' in str(item[1]).upper() for item in result)
+
+        texts = [str(item[1]) for item in result]
+        joined = ''.join(texts)
+
+        # 1. 载具排除（最高优先级，宁可漏检不可上车）
+        if any(k in joined for k in self.VEHICLE_KEYWORDS):
+            return False
+        # 2. 明确交互词
+        if any(k in joined for k in self.INTERACT_KEYWORDS):
+            return True
+        # 3. F 键帽字母辅助判定
+        if 'F' in joined.upper():
+            return True
+        # 4. 物品名兜底：含中文且不是游戏公告的文字，按交互提示处理
+        def _has_cjk(s):
+            return any('\u4e00' <= c <= '\u9fff' for c in s)
+        other = [t for t in texts if _has_cjk(t) and not any(k in t for k in self.NOTICE_KEYWORDS)]
+        return len(other) > 0
 
     def is_map_open(self, game_img):
         """检测全屏地图是否打开（依赖 mapopen.png 模板）。
