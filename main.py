@@ -31,6 +31,7 @@ if __name__ == "__main__":
             choice = input("等待输入... (请输入 1 或 2 并按回车): ").strip()
             controller.init_yolo()
             if choice == '1':
+                time.sleep(3)
                 print("\n🚀 正在为您启动全自动挂机主循环...")
                 time.sleep(0.5)
                 controller.run()

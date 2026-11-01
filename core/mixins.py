@@ -204,6 +204,7 @@ class VisionMixin:
             'cancel': getattr(self, 'cancel_template', None)
             }
         template = templates.get(template_name)
+        if template is None: print(-1)
         if screen is None or template is None: return False, 0.0, None
 
         try:
@@ -217,6 +218,7 @@ class VisionMixin:
                 thresh = self.thresholds.get(template_name, 0.8)
             else:
                 thresh = 0.8
+                
 
             if max_val > 0.2:
                 if template_name in ['count4', 'naozhong', 'start_btn', 'password']:

@@ -1,6 +1,7 @@
 import time
 import os
 import ctypes  # 🚀 新增：用于调用 Windows 底层硬件 API
+from rapidocr_onnxruntime import RapidOCR
 
 # ===================================================================
 # 🛡️ 硬件防烧毁：定义 Windows 电源状态结构体
@@ -36,6 +37,7 @@ import win32api
 import win32con
 import win32gui
 from ultralytics import YOLO
+pydirectinput.FAILSAFE = False
 
 from config import Config
 from core.mixins import WindowMixin, VisionMixin, MathMixin, ActionMixin
@@ -100,6 +102,7 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
         self.best_jump_point_coords = None
         self.has_marked_this_match = False
         self.initial_target_coords = None
+        self.ocr = RapidOCR()
 
         keyboard.add_hotkey('home', self.toggle_pause)
         print("💡 快捷键已启动：【HOME】暂停/开始，【END】强制退出")
@@ -214,7 +217,7 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
         # 1. 优先执行底层硬件供电安全检测
         if not self.check_power_safe():
             return True  # 发现断电，立刻向全系统广播中断信号！
-        if keyboard.is_pressed('end'):
+        if keyboard.is_pressed('end') or keyboard.is_pressed('slash'):
             self.running = False
             return True
         return not self.running
@@ -716,13 +719,45 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
         if is_d_pressed:
             pydirectinput.keyUp('d')
         time.sleep(1.5)
-        for _ in range(12): self.rotate_mouse_raw(0, -140); time.sleep(0.04)
+        for _ in range(24): self.rotate_mouse_raw(0, -140); time.sleep(0.04)
         time.sleep(0.5)
         pydirectinput.press('v')
 
         # 🌟 修复落地卡死 bug，交还控制权给主循环
         return True
 
+    def rotate_mouse_smooth(self, dx, dy=0, max_step=12, interval=0.001):
+        """把大位移切成小步、按帧间隔发送，模拟真实鼠标拖动"""
+        dx, dy = int(dx) * 16, int(dy) * 16
+        if dx == 0 and dy == 0:
+            return
+        n = max(1, math.ceil(max(abs(dx), abs(dy)) / max_step))
+        sx, sy = dx / n, dy / n
+        for _ in range(n):
+            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE,
+                                int(round(sx)), int(round(sy)), 0, 0)
+            time.sleep(interval*random.randint(3,9))
+
+    def check_f_prompt(self, game_img):
+        """OCR 检测屏幕中心偏右下区域是否出现 F 交互提示"""
+        if game_img is None:
+            print(13213123123123)
+            return False
+        
+        h, w = game_img.shape[:2]
+        roi = game_img[h // 2 - int(h * 0.2): h // 2 + int(h * 0.3), w // 2 - int(h * 0.2): w // 2 + int(h * 0.3)]
+        if roi.size == 0:
+            return False
+        roi = cv2.resize(roi, None, fx=2, fy=2)
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        # 白底黑字：亮字变暗、暗底变亮，阈值二值化后就是标准 OCR 输入
+        _, roi = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        result, _ = self.ocr(roi)
+
+        if not result:
+            return False
+        return any('F' in str(item[1]).upper() for item in result) or any('推门' in str(item[1]).upper() for item in result)
+    
     def start_auto_run(self, window_info=None):
         import pydirectinput
         pydirectinput.FAILSAFE = False
@@ -835,10 +870,8 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
                 game_img, current_window_info = self.capture_game_screen()
                 if game_img is None: time.sleep(0.05); continue
 
-                current_f_score = 0.0
-                if f_tmpl is not None:
-                    res_f = cv2.matchTemplate(game_img, f_tmpl, cv2.TM_CCOEFF_NORMED)
-                    current_f_score = cv2.minMaxLoc(res_f)[1]
+                f_prompt_detected = self.check_f_prompt(game_img)
+                current_f_score = 1.0 if f_prompt_detected else 0.0
 
                 if self.handle_endgame(game_img, current_window_info):
                     self.has_marked_this_match = False
@@ -895,13 +928,19 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
                 # ==========================================
                 if bot_state not in ["VERIFY_DOOR", "ITEM_PICKUP", "AFK"]:
                     ignore_f = False
+                    print(f"1{bot_state}")
+                    
                     if bot_state in ["RUNNING", "CIRCLING"]:
+                        
+                        print(f"2{bot_state}")
                         if time.time() - global_last_door_time > 3:
                             ignore_f = True
 
                     if bot_state == "APPROACH_DOOR" and not has_aligned_door:
                         ignore_f = True
-                    if current_f_score > 0.72 and not ignore_f:
+                    
+                    print(f"3{bot_state}, {ignore_f}, {f_prompt_detected}")
+                    if f_prompt_detected and not ignore_f:
                         print(f"\n✋ 触发物理交互 [F]！(置信度: {current_f_score:.2f}) 强行打断动作，进入核验！")
                         stop_all()
                         bot_state = "VERIFY_DOOR"
@@ -1478,10 +1517,9 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
                     found_f = False
                     found_door = False
                     score_f = 0.0
-                    if f_tmpl is not None:
-                        res_f = cv2.matchTemplate(c_img, f_tmpl, cv2.TM_CCOEFF_NORMED)
-                        score_f = cv2.minMaxLoc(res_f)[1]
-                        if score_f > 0.72: found_f = True
+                    found_f = self.check_f_prompt(c_img)
+                    score_f = 1.0 if found_f else 0.0
+
                     for tmpl in open_door_templates:
                         res_d = cv2.matchTemplate(c_img, tmpl, cv2.TM_CCOEFF_NORMED)
                         if cv2.minMaxLoc(res_d)[1] > 0.7:
@@ -1631,7 +1669,7 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
         try:
             while self.running:
                 if self.is_paused: time.sleep(1); continue
-                if keyboard.is_pressed('end'): break
+                if keyboard.is_pressed('end') or keyboard.is_pressed('slash'): break
 
                 # 🌟 2. 核心大看门狗巡逻：超过 5 分钟无进展就无情重启
                 if time.time() - watchdog_timer > 120:
@@ -1673,8 +1711,9 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
                     if self.handle_password_input(game_img, window_info): continue
 
                 f_start, c_start, pos_start = self.find_image(game_img, 'start_btn')
+
                 f_load, _, _ = self.find_image(game_img, 'loading')
-                f_naozhong, _, _ = self.find_image(game_img, 'naozhong')
+                f_naozhong, c_naozhong, _ = self.find_image(game_img, 'naozhong')
                 f_count4, c_count4, _ = self.find_image(game_img, 'count4')
                 now = time.strftime("%H:%M:%S")
 

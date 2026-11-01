@@ -2,15 +2,15 @@
 
 class Config:
     # --- 路径配置 ---
-    IMAGE_DIR = r"E:\pythonDemo\pubg\image"
-    MODEL_PATH = r"E:\pythonDemo\aipubg\runs\detect\pubg_toilet_model-7\weights\best.engine"
+    IMAGE_DIR = r"D:\文档\GitHub\pubg-Bp-BotScrip\image"
+    MODEL_PATH = r"D:\文档\GitHub\pubg-Bp-BotScrip\pubg_toilet_model-7\weights\best.pt"
 
     # --- 游戏参数 ---
     REF_WIDTH = 1000
     REF_HEIGHT = 1000
     MAP_SIZE = 1050
     JUMP_DISTANCE_THRESHOLD = 150
-    SECONDARY_PASSWORD = "131932"  # 例如"你的二级密码"
+    SECONDARY_PASSWORD = "844844"  # 例如"你的二级密码"
     # --- 精确跳伞点位 ---
     TARGET_POINTS = [
         {"id": 1, "x": 544, "y": 577, "name": "精确厕所_1"},
