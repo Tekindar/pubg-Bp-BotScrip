@@ -201,7 +201,9 @@ class VisionMixin:
             'confirm': getattr(self, 'confirm_template', None),
             'confirm2': getattr(self, 'confirm2_template', None),
             'close': getattr(self, 'close_template', None),
-            'cancel': getattr(self, 'cancel_template', None)
+            'cancel': getattr(self, 'cancel_template', None),
+            'mapopen': getattr(self, 'mapopen_template', None),
+            'lobby_popup': getattr(self, 'lobby_popup_template', None)
             }
         template = templates.get(template_name)
         if template is None: print(-1)

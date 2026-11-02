@@ -29,6 +29,7 @@ class Config:
         'user': 0.4, 'feiji': 0.55, 'target': 0.65,
         'naozhong': 0.70, 'leave_game': 0.65,
         'password': 0.88,'err':0.80,'confirm2':0.80,
-        'back': 0.8, 'next': 0.80, 'confirm': 0.80, 'close': 0.80
+        'back': 0.8, 'next': 0.80, 'confirm': 0.80, 'close': 0.80,
+        'mapopen': 0.75, 'lobby_popup': 0.75
     }
 

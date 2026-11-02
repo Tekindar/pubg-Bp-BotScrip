@@ -83,6 +83,14 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
         self.close_template = self._load_img("close.png")
         self.cancel_template = self._load_img("cancle.png")
         self.flying_ui_template = self._load_img("flying_ui.png")
+        # 🌟 地图状态检测模板：验证式开关地图用，杜绝盲按 M/ESC 导致的状态错位
+        self.mapopen_template = self._load_img("mapopen.png")
+        if self.mapopen_template is None:
+            print("   ⚠️ 未找到 mapopen.png，地图开关将退回【盲按】模式")
+        # 🌟 大厅额外弹窗模板：优先级高于开始按钮；文件不存在时自动跳过，补图后即生效
+        self.lobby_popup_template = self._load_img("lobby_popup.png")
+        if self.lobby_popup_template is None:
+            print("   ℹ️ 未找到 lobby_popup.png，大厅弹窗拦截暂不启用（补图后自动生效）")
 
         # ====================================================
         # 🌟 雷达参数与多重目标库加载
@@ -319,15 +327,20 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
             if min_dist > 100.0:
                 print(f"\n⛔ 警告: 目标点 {best_target['name']} 理论最短距离为 {min_dist:.1f}px")
                 print("⛔ 距离超过战术底线 (100px)！航线过偏，准备主动秒退本局...")
-                pydirectinput.keyDown('m');
-                time.sleep(0.1);
-                pydirectinput.keyUp('m');
-                time.sleep(1.0)
-                pydirectinput.press('esc');
-                time.sleep(1.0)
+
+                # 🌟 第一步：验证式关地图。旧代码盲按 M，若地图已提前关闭，
+                # 这一按反而重新打开地图，导致后面的 ESC 落在地图而不是系统菜单上
+                self.set_map_state(False)
+
+                # 🌟 第二步：验证式打开系统菜单并点击【离开游戏】。
+                # 每轮按 ESC 后必须确认 leave_game 真的出现才点击，最多重试 3 轮
                 clicked_leave = False
-                game_img, new_window_info = self.capture_game_screen()
-                if game_img is not None:
+                for attempt in range(3):
+                    pydirectinput.press('esc');
+                    time.sleep(1.2)
+                    game_img, new_window_info = self.capture_game_screen()
+                    if game_img is None:
+                        continue
                     found, conf, pos = self.find_image(game_img, 'leave_game')
                     if found:
                         win_x, win_y = new_window_info['screen_pos']
@@ -339,7 +352,11 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
                         time.sleep(0.1);
                         pyautogui.click();
                         clicked_leave = True
+                        break
+                    print(f"   ⚠️ 第 {attempt + 1}/3 次按 ESC 后未检测到离开菜单，重试...")
+
                 if not clicked_leave:
+                    # 老兜底：盲点离开按钮的历史固定坐标
                     virtual_cx = 150;
                     virtual_cy = 500
                     click_x, click_y = self.virtual_to_real_screen(virtual_cx, virtual_cy, window_info)
@@ -347,6 +364,32 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
                         win32api.SetCursorPos((click_x, click_y));
                         time.sleep(0.1);
                         pyautogui.click()
+                    time.sleep(0.8)
+
+                    # 🌟 第三步（关键修复）：秒退失败时绝不允许菜单残留！
+                    # 若 leave_game 仍可见说明"待退出"菜单还开着，再按 ESC 把它关掉，
+                    # 让游戏恢复正常画面继续本局，而不是卡死在菜单上
+                    img_chk, _ = self.capture_game_screen()
+                    if img_chk is not None and self.find_image(img_chk, 'leave_game')[0]:
+                        print("   ⚠️ 秒退未成功且系统菜单残留，按 ESC 关闭菜单，本局继续正常执行")
+                        pydirectinput.press('esc');
+                        time.sleep(0.8)
+                else:
+                    # 🌟 点击离开后可能出现二次确认弹窗，顺手处理
+                    time.sleep(1.0)
+                    img_cf, cf_win = self.capture_game_screen()
+                    if img_cf is not None:
+                        f_cf, _, p_cf = self.find_image(img_cf, 'confirm')
+                        if not f_cf:
+                            f_cf, _, p_cf = self.find_image(img_cf, 'confirm2')
+                        if f_cf and p_cf:
+                            cfx, cfy = self.virtual_to_real_screen(p_cf[0], p_cf[1], cf_win)
+                            if cfx and cfy:
+                                win32api.SetCursorPos((cfx, cfy));
+                                time.sleep(0.1);
+                                pyautogui.click()
+                                print("   ✅ 已点击离开二次确认，返回大厅")
+
                 time.sleep(1.0)
                 self.is_waiting_for_jump = False
                 self.has_marked_this_match = False
@@ -386,10 +429,10 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             time.sleep(0.3)
 
-            pydirectinput.keyDown('m');
-            time.sleep(0.25);
-            pydirectinput.keyUp('m');
-            time.sleep(0.5)
+            # 🌟 验证式关地图：只有确认地图还开着才按 M。
+            # 旧代码盲按 M，若地图已被提前关闭（飞机到终点自动收图/切出去过），
+            # 这一按反而会把地图重新打开，随后的 F 就跳不出去了
+            self.set_map_state(False)
             pydirectinput.keyDown('f');
             time.sleep(0.2);
             pydirectinput.keyUp('f');
@@ -738,14 +781,30 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
                                 int(round(sx)), int(round(sy)), 0, 0)
             time.sleep(interval*random.randint(3,9))
 
+    # 🌟 F 交互提示判定词表（按需自己增删）
+    # 载具词：命中即视为"上车"提示，一律不按 F（防止误入载具）
+    VEHICLE_KEYWORDS = ['上车', '下车', '驾驶', '乘坐', '载具']
+    # 明确交互词：命中即为 F 提示
+    INTERACT_KEYWORDS = ['推门', '开门', '关门', '拾取', '救援', '搀扶', '扛起', '背负']
+    # 游戏公告词：安全区倒计时之类的屏幕中央通知，不是交互提示，过滤掉防误触
+    NOTICE_KEYWORDS = ['安全区', '阶段', '距离', '比赛', '存活', '剩余', '分钟', '秒', '分']
+
     def check_f_prompt(self, game_img):
-        """OCR 检测屏幕中心偏右下区域是否出现 F 交互提示"""
+        """OCR 检测屏幕中心偏右下区域是否出现 F 交互提示。
+        判定优先级：
+          1. 含载具词（上车/驾驶…）      -> False（绝不按 F）
+          2. 含明确交互词（推门/拾取…）  -> True
+          3. 含字母 F（键帽被识别出来时）-> True
+          4. 其余含中文的文字（物品名每次不同，靠这条兜底），
+             且不属于游戏公告            -> True
+          5. 无文字                     -> False
+        """
         if game_img is None:
-            print(13213123123123)
             return False
-        
+
         h, w = game_img.shape[:2]
-        roi = game_img[h // 2 - int(h * 0.2): h // 2 + int(h * 0.3), w // 2 - int(h * 0.2): w // 2 + int(h * 0.3)]
+        # 有效区域：x 0.39~0.67w, y 0.30~0.80h（"F 推门"实测落点；顺带修正了旧代码 x 方向误用 h 计算的问题）
+        roi = game_img[int(h * 0.30):int(h * 0.80), int(w * 0.39):int(w * 0.67)]
         if roi.size == 0:
             return False
         roi = cv2.resize(roi, None, fx=2, fy=2)
@@ -756,8 +815,72 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
 
         if not result:
             return False
-        return any('F' in str(item[1]).upper() for item in result) or any('推门' in str(item[1]).upper() for item in result)
-    
+
+        texts = [str(item[1]) for item in result]
+        joined = ''.join(texts)
+
+        # 1. 载具排除（最高优先级，宁可漏检不可上车）
+        if any(k in joined for k in self.VEHICLE_KEYWORDS):
+            return False
+        # 2. 明确交互词
+        if any(k in joined for k in self.INTERACT_KEYWORDS):
+            return True
+        # 3. F 键帽字母辅助判定
+        if 'F' in joined.upper():
+            return True
+        # 4. 物品名兜底：含中文且不是游戏公告的文字，按交互提示处理
+        def _has_cjk(s):
+            return any('\u4e00' <= c <= '\u9fff' for c in s)
+        other = [t for t in texts if _has_cjk(t) and not any(k in t for k in self.NOTICE_KEYWORDS)]
+        return len(other) > 0
+
+    def is_map_open(self, game_img):
+        """检测全屏地图是否打开（依赖 mapopen.png 模板）。
+        返回 True/False；模板缺失或截图异常时返回 None 表示"状态未知"。"""
+        tmpl = getattr(self, 'mapopen_template', None)
+        if game_img is None or tmpl is None:
+            return None
+        try:
+            res = cv2.matchTemplate(game_img, tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(res)
+            self.last_mapopen_score = max_val
+            return max_val >= self.thresholds.get('mapopen', 0.75)
+        except Exception:
+            return None
+
+    def set_map_state(self, want_open, max_retries=3):
+        """验证式开关地图：先检测当前状态，只有状态不符才按 M，按完再截图验证。
+        彻底解决"盲按 M 导致地图状态错位，ESC 误入系统菜单"的问题。"""
+        want_str = '打开' if want_open else '关闭'
+        for attempt in range(max_retries):
+            img, _ = self.capture_game_screen()
+            state = self.is_map_open(img)
+            if state is None:
+                if getattr(self, 'mapopen_template', None) is None:
+                    # 没有模板可用，退回老逻辑：盲按一次切换
+                    print("   ⚠️ mapopen.png 不可用，退回盲按 M 切换地图")
+                    pydirectinput.keyDown('m');
+                    time.sleep(0.1);
+                    pydirectinput.keyUp('m')
+                    time.sleep(0.8)
+                    return False
+                time.sleep(0.5)
+                continue
+            if state == want_open:
+                return True
+            print(f"   🗺️ 地图状态校正 (当前:{'开' if state else '关'} -> 目标:{want_str})，按 M...")
+            pydirectinput.keyDown('m');
+            time.sleep(0.1);
+            pydirectinput.keyUp('m')
+            time.sleep(0.9)
+        # 最终确认一次，仅用于告警
+        img, _ = self.capture_game_screen()
+        state = self.is_map_open(img)
+        if state is not None and state != want_open:
+            print(f"   ⚠️ 地图状态校正{max_retries}次后仍未{want_str} "
+                  f"(mapopen得分:{getattr(self, 'last_mapopen_score', 0):.2f})，按当前状态继续执行")
+        return state == want_open
+
     def start_auto_run(self, window_info=None):
         import pydirectinput
         pydirectinput.FAILSAFE = False
@@ -1709,6 +1832,25 @@ class PUBGSmartMarkerV9(WindowMixin, VisionMixin, MathMixin, ActionMixin):
 
                 if hasattr(self, 'handle_password_input'):
                     if self.handle_password_input(game_img, window_info): continue
+
+                # 🌟 大厅额外弹窗拦截：优先级高于【开始游戏】。
+                # 原作者未考虑到的弹窗（公告/通知/活动窗等）会挡住开始按钮，必须先点掉。
+                # 模板文件 lobby_popup.png 不存在时本检测自动跳过，补图后即生效。
+                if getattr(self, 'lobby_popup_template', None) is not None:
+                    f_popup, c_popup, pos_popup = self.find_image(game_img, 'lobby_popup')
+                    if f_popup:
+                        now_popup = time.strftime("%H:%M:%S")
+                        print(f"\n[{now_popup}] 🪟 检测到【大厅弹窗】(得分:{c_popup:.2f})，优先点击关闭...")
+                        win_x, win_y = window_info['screen_pos']
+                        bor_x, bor_y = window_info['border']
+                        real_w, real_h = window_info['real_client_size']
+                        real_click_x = int(pos_popup[0] * (real_w / 1920.0))
+                        real_click_y = int(pos_popup[1] * (real_h / 1080.0))
+                        win32api.SetCursorPos((win_x + bor_x + real_click_x, win_y + bor_y + real_click_y))
+                        time.sleep(0.1);
+                        pyautogui.click();
+                        time.sleep(1.5)
+                        continue
 
                 f_start, c_start, pos_start = self.find_image(game_img, 'start_btn')
 
